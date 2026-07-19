@@ -8,7 +8,10 @@ Search Family Guy episodes by anything that happens in them — main plot or the
 - On **mobile**, the ▶ button uses a `disneyplus://` deep link that opens the episode
   in the Disney+ app.
 - On **desktop**, it opens the Disney+ web player in a new tab.
-- 🎲 picks a random episode.
+- 🎲 picks a random episode; tapping the heading resets to the start screen.
+- `"double quotes"` match an exact phrase; "Match whole words only" turns off
+  prefix matching on the last word you type.
+- Every card links to the episode's Wikipedia entry, IMDb page, and Family Guy Wiki page.
 
 ## How it works
 

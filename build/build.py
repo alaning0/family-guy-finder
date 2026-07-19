@@ -290,6 +290,8 @@ def parse_season_page(wikitext):
         if not m:
             continue
         num = int(m.group())
+        om = re.search(r"\d+", fields.get("EpisodeNumber", ""))
+        overall = int(om.group()) if om else None  # row anchor on season pages is #ep<overall>
         title_raw = fields.get("Title", "")
         link = re.search(r"\[\[([^\[\]|]+)(?:\|([^\[\]]+))?\]\]", title_raw)
         article = link.group(1).strip() if link else None
@@ -303,6 +305,7 @@ def parse_season_page(wikitext):
             "article": article,
             "summary": clean_wikitext(fields.get("ShortSummary", "")),
             "year": year,
+            "overall": overall,
         }
     return rows
 
@@ -321,17 +324,19 @@ def plot_from_wikitext(wikitext):
 
 
 def fetch_wikipedia(max_season, refresh):
-    """Return {(season, episode): {title, summary, plot, year}}."""
+    """Return ({(season, episode): {title, summary, plot, year, overall}}, {season: page_title})."""
     season_names = [f"Family Guy season {s}" for s in range(1, max_season + 1)]
     season_pages = wiki_batch_pages(season_names, "wiki_seasons", refresh)
     resolved_season_pages = {final for final, _ in season_pages.values()}
 
     out = {}
+    season_titles = {}
     for s in range(1, max_season + 1):
         got = season_pages.get(f"Family Guy season {s}")
         if not got:
             print(f"  ! Wikipedia: no season page for season {s}")
             continue
+        season_titles[s] = got[0]
         rows = parse_season_page(got[1])
         print(f"  Wikipedia season {s}: {len(rows)} episodes in table")
         for e, row in rows.items():
@@ -346,13 +351,126 @@ def fetch_wikipedia(max_season, refresh):
         # a redirect back to a season page means the episode has no real article
         if got and got[0] not in resolved_season_pages:
             row["plot"] = plot_from_wikitext(got[1])
-    return out
+            row["article"] = got[0]  # use the resolved title for linking
+        else:
+            row["article"] = None
+    return out, season_titles
 
 
-# ------------------------------------------------------------------- merge
+# ------------------------------------------------------ Wikidata / Fandom
+
+WIKIDATA_SPARQL = "https://query.wikidata.org/sparql"
+FANDOM_API = "https://familyguy.fandom.com/api.php"
+FG_QID = "Q5930"            # Family Guy (the series) on Wikidata
+IMDB_SERIES = "tt0182576"   # Family Guy on IMDb (P345 of Q5930)
+
 
 def norm_title(t):
     return re.sub(r"[^a-z0-9]+", "", (t or "").lower())
+
+
+def fetch_wikidata(refresh):
+    """IMDb ids for episodes: returns (by_overall, by_season_title) lookup maps."""
+    query = """
+    SELECT ?ep ?epLabel ?imdb ?ordinal ?seasonLabel WHERE {
+      ?ep wdt:P179 wd:%s .
+      OPTIONAL { ?ep wdt:P345 ?imdb . }
+      OPTIONAL { ?ep p:P179 ?st . ?st ps:P179 wd:%s . ?st pq:P1545 ?ordinal . }
+      OPTIONAL { ?ep wdt:P4908 ?season . }
+      SERVICE wikibase:label { bd:serviceParam wikibase:language "en". }
+    }""" % (FG_QID, FG_QID)
+
+    def fetch():
+        url = WIKIDATA_SPARQL + "?" + urllib.parse.urlencode({"query": query, "format": "json"})
+        return http_json(url, ua=UA_WIKI)
+
+    rows = cached("wikidata_episodes", fetch, refresh, delay=1.0)["results"]["bindings"]
+    by_overall, by_season_title, title_ids = {}, {}, {}
+    for r in rows:
+        imdb = r.get("imdb", {}).get("value")
+        if not imdb:
+            continue
+        if "ordinal" in r:
+            m = re.search(r"\d+", r["ordinal"]["value"])
+            if m:
+                by_overall.setdefault(int(m.group()), imdb)
+        sm = re.search(r"season (\d+)", r.get("seasonLabel", {}).get("value", ""))
+        if sm:
+            key = (int(sm.group(1)), norm_title(r.get("epLabel", {}).get("value", "")))
+            by_season_title.setdefault(key, imdb)
+        # newest seasons often lack ordinal/season on Wikidata; title is the only key
+        title_ids.setdefault(norm_title(r.get("epLabel", {}).get("value", "")), set()).add(imdb)
+    by_title = {t: ids.pop() for t, ids in title_ids.items() if t and len(ids) == 1}
+    print(f"Wikidata: {len(rows)} episode rows, {len(by_overall)} IMDb ids by overall number, "
+          f"{len(by_title)} by unique title")
+    return by_overall, by_season_title, by_title
+
+
+def fetch_fandom(titles, refresh):
+    """Verify which titles exist on familyguy.fandom.com; returns {title: page_title}."""
+    def variants(t):
+        seen, out = set(), []
+        for v in (t, t.replace("#", "No. "), t.replace("#", ""),
+                  t.replace(" & ", " and "), t.replace(" and ", " & "),
+                  t.replace("–", "-"), t.replace("...", ""), t + " (Family Guy)"):
+            v = v.strip()
+            if "#" not in v and v not in seen:
+                seen.add(v)
+                out.append(v)
+        return out
+
+    todo = {t: variants(t) for t in titles}
+    resolved = {}
+    for attempt in range(max(len(v) for v in todo.values())):
+        batch = sorted({v[attempt] for t, v in todo.items() if t not in resolved and attempt < len(v)})
+        if not batch:
+            break
+        for i in range(0, len(batch), 50):
+            chunk = batch[i:i + 50]
+            digest = hashlib.md5(("|".join(chunk)).encode()).hexdigest()[:10]
+
+            def fetch(chunk=chunk):
+                qs = urllib.parse.urlencode({
+                    "action": "query", "titles": "|".join(chunk), "redirects": "1",
+                    "format": "json", "formatversion": "2"})
+                return http_json(f"{FANDOM_API}?{qs}", ua=UA_WIKI)
+
+            data = cached(f"fandom_{digest}", fetch, refresh, delay=1.0)
+            q = data.get("query", {})
+            mapping = {t: t for t in chunk}
+            for step in ("normalized", "redirects"):
+                for entry in q.get(step, []):
+                    for req, cur in mapping.items():
+                        if cur == entry["from"]:
+                            mapping[req] = entry["to"]
+            exists = {p["title"] for p in q.get("pages", []) if not p.get("missing")}
+            for t, v in todo.items():
+                if t in resolved or attempt >= len(v):
+                    continue
+                final = mapping.get(v[attempt])
+                if final in exists:
+                    resolved[t] = final
+
+    # last resort: the wiki's own search, accepted only on a normalized-title match
+    canon = lambda t: norm_title(t.replace("&", " and "))
+    for t in sorted(set(titles) - set(resolved)):
+        def fetch(t=t):
+            qs = urllib.parse.urlencode({
+                "action": "query", "list": "search", "srsearch": t, "srlimit": "3",
+                "format": "json", "formatversion": "2"})
+            return http_json(f"{FANDOM_API}?{qs}", ua=UA_WIKI)
+        digest = hashlib.md5(t.encode()).hexdigest()[:10]
+        data = cached(f"fandom_search_{digest}", fetch, refresh, delay=1.0)
+        for hit in data.get("query", {}).get("search", []):
+            base = hit["title"].split("/")[0]  # hits are often subpages like "Title/Goofs"
+            if canon(base) == canon(t):
+                resolved[t] = base
+                break
+    print(f"Fandom: {len(resolved)}/{len(titles)} episode pages found")
+    return resolved
+
+
+# ------------------------------------------------------------------- merge
 
 
 def main():
@@ -364,26 +482,62 @@ def main():
 
     jw = fetch_justwatch(args.country, args.refresh)
     max_season = args.max_season or max(s for s, _ in jw)
-    wiki = fetch_wikipedia(max_season, args.refresh)
+    wiki, season_titles = fetch_wikipedia(max_season, args.refresh)
+    imdb_by_overall, imdb_by_st, imdb_by_title = fetch_wikidata(args.refresh)
+    overrides_path = ROOT / "build" / "imdb-overrides.json"
+    imdb_overrides = {}
+    if overrides_path.exists():
+        raw = json.loads(overrides_path.read_text())
+        imdb_overrides = {(int(s), int(e)): tt for s, eps in raw.items() if not s.startswith("_")
+                          for e, tt in eps.items()}
+        print(f"IMDb overrides: {len(imdb_overrides)} episodes from {overrides_path.name}")
 
     keys = sorted(set(jw) | set(wiki))
-    episodes, mismatches, no_link, no_plot = [], [], [], []
+    titles = {(s, e): (wiki.get((s, e)) or {}).get("title") or (jw.get((s, e)) or {}).get("title") or f"Episode {e}"
+              for s, e in keys}
+    fandom = fetch_fandom(sorted(set(titles.values())), args.refresh)
+
+    underscore = lambda t: t.replace(" ", "_")
+    episodes, mismatches, no_link, no_plot, no_imdb, no_fandom = [], [], [], [], [], []
     for s, e in keys:
         j, w = jw.get((s, e)), wiki.get((s, e))
-        title = (w or {}).get("title") or (j or {}).get("title") or f"Episode {e}"
+        title = titles[(s, e)]
         if j and w and norm_title(j["title"]) != norm_title(w["title"]):
             mismatches.append(f"S{s:02d}E{e:02d}: JW '{j['title']}' vs Wiki '{w['title']}'")
         short = (w or {}).get("summary") or (j or {}).get("short") or ""
         plot = (w or {}).get("plot") or ""
         uuid = (j or {}).get("uuid")
+        overall = (w or {}).get("overall")
+
+        if (w or {}).get("article"):
+            wp = underscore(w["article"])
+        elif s in season_titles:
+            anchor = f"#ep{overall}" if overall else ""
+            wp = underscore(season_titles[s]) + anchor
+        else:
+            wp = "List_of_Family_Guy_episodes"
+
+        im = imdb_overrides.get((s, e)) \
+            or (imdb_by_overall.get(overall) if overall else None) \
+            or imdb_by_st.get((s, norm_title(title))) \
+            or imdb_by_st.get((s, norm_title((j or {}).get("title", "")))) \
+            or imdb_by_title.get(norm_title(title)) \
+            or imdb_by_title.get(norm_title((j or {}).get("title", "")))
+        fg = fandom.get(title)
+
         if not uuid:
             no_link.append(f"S{s:02d}E{e:02d} {title}")
         if not plot:
             no_plot.append(f"S{s:02d}E{e:02d} {title}")
+        if not im:
+            no_imdb.append(f"S{s:02d}E{e:02d} {title}")
+        if not fg:
+            no_fandom.append(f"S{s:02d}E{e:02d} {title}")
         episodes.append({
             "s": s, "e": e, "t": title,
             "y": (w or {}).get("year"),
             "short": short, "plot": plot, "u": uuid,
+            "wp": wp, "im": im, "fg": underscore(fg) if fg else None,
         })
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
@@ -391,6 +545,7 @@ def main():
         "built": time.strftime("%Y-%m-%d"),
         "country": args.country.upper(),
         "series": SERIES_URL,
+        "imdb_series": IMDB_SERIES,
         "count": len(episodes),
         "episodes": episodes,
     }, ensure_ascii=False, separators=(",", ":")))
@@ -410,6 +565,12 @@ def main():
     if no_plot:
         print(f"\nno full plot, using summary ({len(no_plot)}):")
         print("\n".join(f"  {m}" for m in no_plot))
+    if no_imdb:
+        print(f"\nno IMDb id, cards fall back to the IMDb season page ({len(no_imdb)}):")
+        print("\n".join(f"  {m}" for m in no_imdb))
+    if no_fandom:
+        print(f"\nno Family Guy Wiki page, cards fall back to wiki search ({len(no_fandom)}):")
+        print("\n".join(f"  {m}" for m in no_fandom))
 
 
 if __name__ == "__main__":

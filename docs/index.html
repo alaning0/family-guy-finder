@@ -36,7 +36,7 @@
     padding: calc(10px + env(safe-area-inset-top)) 14px 10px;
     border-bottom: 1px solid var(--line);
   }
-  h1 { font-size: 17px; margin: 0 0 8px; letter-spacing: .2px; }
+  h1 { font-size: 17px; margin: 0 0 8px; letter-spacing: .2px; cursor: pointer; user-select: none; }
   h1 .sub { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 6px; }
   .bar { display: flex; gap: 8px; }
   #q {
@@ -50,6 +50,11 @@
     background: var(--card); cursor: pointer; flex: none; padding: 0;
   }
   #random:active { transform: scale(.94); }
+  .opt {
+    display: flex; align-items: center; gap: 6px; margin-top: 8px;
+    font-size: 13px; color: var(--muted); width: fit-content;
+  }
+  .opt input { accent-color: var(--accent); margin: 0; }
   main { max-width: 640px; margin: 0 auto; padding: 12px 14px 30px; }
   .note { color: var(--muted); font-size: 13px; margin: 6px 2px 10px; }
   .card {
@@ -70,6 +75,12 @@
   }
   .play:active { opacity: .85; }
   .weblink, .serieslink { font-size: 13px; color: var(--muted); }
+  .links { margin-top: 9px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .links a {
+    font-size: 13px; color: var(--muted); text-decoration: none;
+    border-bottom: 1px dotted var(--muted);
+  }
+  .links a:active { color: var(--text); }
   .badge {
     font-size: 12px; color: var(--muted); border: 1px solid var(--line);
     padding: 6px 10px; border-radius: 10px;
@@ -87,11 +98,12 @@
 </head>
 <body>
 <header>
-  <h1>📺 Family Guy Episode Finder<span class="sub" id="count"></span></h1>
+  <h1 title="Back to start">📺 Family Guy Episode Finder<span class="sub" id="count"></span></h1>
   <div class="bar">
-    <input id="q" type="search" placeholder="Search plots &amp; subplots…" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <input id="q" type="search" placeholder="Search plots… use &quot;quotes&quot; for exact phrases" autocomplete="off" autocapitalize="off" spellcheck="false">
     <button id="random" title="Random episode" aria-label="Random episode">🎲</button>
   </div>
+  <label class="opt"><input type="checkbox" id="whole"> Match whole words only</label>
 </header>
 <main id="results"></main>
 <footer id="foot"></footer>
@@ -99,7 +111,7 @@
 "use strict";
 const $q = document.getElementById("q");
 const $results = document.getElementById("results");
-const SAMPLES = ["chicken fight", "giant chicken", "Y2K", "time machine", "Meg gets a boyfriend", "Brian publishes a book", "road trip", "prostate exam"];
+const SAMPLES = ["chicken fight", "\"giant chicken\"", "Y2K", "time machine", "Meg gets a boyfriend", "Brian publishes a book", "road trip", "prostate exam"];
 
 const isMobile = /iPhone|iPod|Android/i.test(navigator.userAgent)
   || (navigator.maxTouchPoints > 1 && /Mac|iPad/i.test(navigator.userAgent));
@@ -124,57 +136,91 @@ fetch("episodes.json")
 
 // ------------------------------------------------------------------ search
 const reEscape = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const wholeWords = () => document.getElementById("whole").checked;
 
-function termRegexes(terms) {
+function parseQuery(qRaw) {
+  // normalize iOS smart quotes so "phrases" work when typed on a phone
+  const q = qRaw.replace(/[“”„]/g, '"').replace(/’/g, "'").trim().toLowerCase();
+  const phrases = [];
+  const rest = q.replace(/"([^"]*)"/g, (_, p) => {
+    const t = p.trim().replace(/\s+/g, " ");
+    if (t) phrases.push(t);
+    return " ";
+  });
+  const terms = rest.match(/[a-z0-9']+/g) || [];
+  const qplain = q.replace(/"/g, " ").replace(/\s+/g, " ").trim();
+  return { qplain, phrases, terms };
+}
+
+function termRegexes(terms, whole) {
   return terms.map((t, i) =>
-    new RegExp("\\b" + reEscape(t) + (i === terms.length - 1 ? "" : "\\b"), "gi"));
+    new RegExp("\\b" + reEscape(t) + (!whole && i === terms.length - 1 ? "" : "\\b"), "gi"));
 }
 const countHits = (str, re) => { re.lastIndex = 0; const m = str.match(re); return m ? m.length : 0; };
+const countSub = (hay, needle) => {
+  let n = 0, i = 0;
+  while ((i = hay.indexOf(needle, i)) !== -1) { n++; i += needle.length; }
+  return n;
+};
 
 function search(qRaw) {
-  const q = qRaw.trim().toLowerCase();
-  const terms = q.match(/[a-z0-9']+/g) || [];
-  if (!terms.length) return null;
-  const res = termRegexes(terms);
+  const { qplain, phrases, terms } = parseQuery(qRaw);
+  if (!phrases.length && !terms.length) return null;
+  const res = termRegexes(terms, wholeWords());
   const scored = [];
   for (const ep of EPS) {
-    let score = 0, present = 0;
+    let score = 0;
+    // every "quoted phrase" must appear somewhere in the episode
+    let phrasesOk = true;
+    for (const ph of phrases) {
+      const t = countSub(ep.tl, ph), s = countSub(ep.sl, ph), p = countSub(ep.pl, ph);
+      if (t + s + p === 0) { phrasesOk = false; break; }
+      score += 12 * t + 6 * s + 3 * Math.min(p, 4);
+    }
+    if (!phrasesOk) continue;
+    let present = 0;
     for (const re of res) {
       const t = countHits(ep.tl, re), s = countHits(ep.sl, re), p = countHits(ep.pl, re);
       if (t + s + p > 0) present++;
       score += 6 * t + 3 * s + Math.min(p, 4);
     }
-    if (!present) continue;
-    score *= (present === terms.length) ? 2 : 0.35;
-    if (terms.length > 1) {
-      if (ep.tl.includes(q)) score += 40;
-      else if (ep.sl.includes(q)) score += 20;
-      else if (ep.pl.includes(q)) score += 12;
+    if (terms.length && !present && !phrases.length) continue;
+    if (terms.length) score *= (present === terms.length) ? 2 : (present ? 0.35 : 0.2);
+    if (!phrases.length && terms.length > 1) {
+      if (ep.tl.includes(qplain)) score += 40;
+      else if (ep.sl.includes(qplain)) score += 20;
+      else if (ep.pl.includes(qplain)) score += 12;
     }
     scored.push([score, ep]);
   }
   scored.sort((a, b) => b[0] - a[0] || (a[1].s - b[1].s) || (a[1].e - b[1].e));
-  return { terms, q, eps: scored.slice(0, 30).map(x => x[1]), total: scored.length };
+  return { terms, phrases, qplain, hl: [...phrases, ...terms],
+           eps: scored.slice(0, 30).map(x => x[1]), total: scored.length };
 }
 
 // ------------------------------------------------------------------ render
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const pad = n => String(n).padStart(2, "0");
 
-function highlight(escapedText, terms) {
-  if (!terms || !terms.length) return escapedText;
-  const re = new RegExp("\\b(" + terms.map(reEscape).join("|") + ")", "gi");
+function highlight(escapedText, hl) {
+  if (!hl || !hl.length) return escapedText;
+  const parts = [...hl].sort((a, b) => b.length - a.length).map(reEscape); // phrases before their words
+  const re = new RegExp("\\b(" + parts.join("|") + ")", "gi");
   return escapedText.replace(re, "<mark>$1</mark>");
 }
 
-function snippet(ep, terms, q) {
+function snippet(ep, r) {
   const fields = [[ep.plot, ep.pl], [ep.short, ep.sl]];
   for (const [orig, low] of fields) {
     if (!orig) continue;
     let pos = -1;
-    if (terms.length > 1 && low.includes(q)) pos = low.indexOf(q);
-    else {
-      for (const re of termRegexes(terms)) {
+    for (const ph of r.phrases) {
+      const p = low.indexOf(ph);
+      if (p >= 0 && (pos < 0 || p < pos)) pos = p;
+    }
+    if (pos < 0 && r.terms.length > 1 && r.qplain && low.includes(r.qplain)) pos = low.indexOf(r.qplain);
+    if (pos < 0) {
+      for (const re of termRegexes(r.terms, wholeWords())) {
         re.lastIndex = 0; const m = re.exec(low);
         if (m && (pos < 0 || m.index < pos)) pos = m.index;
       }
@@ -204,50 +250,83 @@ function playLinks(ep) {
   return `<a class="play" href="${web}" target="_blank" rel="noopener">▶&nbsp; Watch on Disney+</a>`;
 }
 
-function card(ep, terms, q) {
+function refLinks(ep) {
+  const wp = `https://en.wikipedia.org/wiki/${encodeURI(ep.wp)}`;
+  const im = ep.im
+    ? `https://www.imdb.com/title/${ep.im}/`
+    : `https://www.imdb.com/title/${DATA.imdb_series}/episodes/?season=${ep.s}`;
+  const fg = ep.fg
+    ? `https://familyguy.fandom.com/wiki/${encodeURI(ep.fg)}`
+    : `https://familyguy.fandom.com/wiki/Special:Search?query=${encodeURIComponent(ep.t)}`;
+  const a = (href, label) => `<a href="${esc(href)}" target="_blank" rel="noopener">${label}</a>`;
+  return a(wp, "Wikipedia") + a(im, "IMDb") + a(fg, "Family Guy Wiki");
+}
+
+function card(ep, r) {
+  const hl = r ? r.hl : [];
   const full = ep.plot || ep.short;
+  const fall = ep.short || ep.plot;
+  const snip = r ? snippet(ep, r) : esc(fall.length > 190 ? fall.slice(0, 190) + "…" : fall);
   return `<div class="card" data-key="${ep.s}-${ep.e}" role="button" aria-expanded="false">
     <div class="meta">S${pad(ep.s)} · E${pad(ep.e)}${ep.y ? " · " + ep.y : ""}</div>
-    <div class="title">${highlight(esc(ep.t), terms)}</div>
-    <div class="snip">${highlight(snippet(ep, terms || [], q || ""), terms)}</div>
-    <div class="full">${highlight(esc(full), terms)}</div>
+    <div class="title">${highlight(esc(ep.t), hl)}</div>
+    <div class="snip">${highlight(snip, hl)}</div>
+    <div class="full">${highlight(esc(full), hl)}</div>
     <div class="actions">${playLinks(ep)}</div>
+    <div class="links">${refLinks(ep)}</div>
   </div>`;
 }
 
 function renderEmpty() {
   $results.innerHTML = `<div class="empty">
       <div class="big">🔎</div>
-      Search ${EPS.length} episodes by anything that happens in them —<br>main plot or the "Meanwhile…" subplot.
+      Search ${EPS.length} episodes by anything that happens in them —<br>main plot or the "Meanwhile…" subplot.<br>
+      Wrap words in "double quotes" to match an exact phrase.
       <div class="chips">${SAMPLES.map(s => `<button class="chip" data-q="${esc(s)}">${esc(s)}</button>`).join("")}</div>
     </div>`;
 }
 
 function renderSearch(r) {
   if (!r.eps.length) {
-    $results.innerHTML = `<div class="empty">Nothing found for “${esc(r.q)}”.<br>Try fewer or different words.</div>`;
+    $results.innerHTML = `<div class="empty">Nothing found for “${esc(r.qplain)}”.<br>Try fewer or different words.</div>`;
     return;
   }
   $results.innerHTML = `<div class="note">${r.total} match${r.total === 1 ? "" : "es"}${r.total > 30 ? ", showing top 30" : ""} — tap a card for the full plot</div>`
-    + r.eps.map(ep => card(ep, r.terms, r.q)).join("");
+    + r.eps.map(ep => card(ep, r)).join("");
 }
 
 function renderRandom() {
   const ep = EPS[Math.floor(Math.random() * EPS.length)];
   $q.value = "";
-  $results.innerHTML = `<div class="note">🎲 Random pick — hit the die again to reroll</div>` + card(ep, [], "");
+  $results.innerHTML = `<div class="note">🎲 Random pick — hit the die again to reroll</div>` + card(ep, null);
 }
 
 // ------------------------------------------------------------------ events
+const rerun = () => {
+  if (!DATA) return;
+  const r = search($q.value);
+  if (!r) renderEmpty(); else renderSearch(r);
+};
 let timer = null;
 $q.addEventListener("input", () => {
   clearTimeout(timer);
-  timer = setTimeout(() => {
-    const r = search($q.value);
-    if (!r) renderEmpty(); else renderSearch(r);
-  }, 70);
+  timer = setTimeout(rerun, 70);
 });
 document.getElementById("random").addEventListener("click", renderRandom);
+
+const $whole = document.getElementById("whole");
+$whole.checked = localStorage.getItem("fgf_whole") === "1";
+$whole.addEventListener("change", () => {
+  localStorage.setItem("fgf_whole", $whole.checked ? "1" : "0");
+  rerun();
+});
+
+document.querySelector("h1").addEventListener("click", () => {
+  if (!DATA) return;
+  $q.value = "";
+  renderEmpty();
+  window.scrollTo({ top: 0 });
+});
 $results.addEventListener("click", e => {
   const chip = e.target.closest(".chip");
   if (chip) { $q.value = chip.dataset.q; $q.dispatchEvent(new Event("input")); return; }
