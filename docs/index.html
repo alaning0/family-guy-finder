@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Family Guy Episode Finder</title>
+<meta name="description" content="Search Family Guy episodes by plot or subplot and open them straight in Disney+.">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f7f9">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1117">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📺</text></svg>">
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1b1e24; --muted: #6b7280;
+    --line: #e5e7eb; --accent: #0063e5; --accent-text: #ffffff;
+    --mark: #ffe58a; --mark-text: #1b1e24; --chip: #eceef2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1117; --card: #171c26; --text: #e8eaed; --muted: #9aa2af;
+      --line: #262c38; --accent: #2f7ae5; --accent-text: #ffffff;
+      --mark: #7a5d00; --mark-text: #fff3c4; --chip: #222836;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  header {
+    position: sticky; top: 0; z-index: 10; background: var(--bg);
+    padding: calc(10px + env(safe-area-inset-top)) 14px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  h1 { font-size: 17px; margin: 0 0 8px; letter-spacing: .2px; }
+  h1 .sub { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 6px; }
+  .bar { display: flex; gap: 8px; }
+  #q {
+    flex: 1; font-size: 16px; padding: 10px 14px; border-radius: 12px;
+    border: 1px solid var(--line); background: var(--card); color: var(--text);
+    outline: none; -webkit-appearance: none; appearance: none;
+  }
+  #q:focus { border-color: var(--accent); }
+  #random {
+    font-size: 20px; width: 46px; border-radius: 12px; border: 1px solid var(--line);
+    background: var(--card); cursor: pointer; flex: none; padding: 0;
+  }
+  #random:active { transform: scale(.94); }
+  main { max-width: 640px; margin: 0 auto; padding: 12px 14px 30px; }
+  .note { color: var(--muted); font-size: 13px; margin: 6px 2px 10px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 13px 14px; margin-bottom: 10px; cursor: pointer;
+  }
+  .meta { font-size: 12px; color: var(--muted); letter-spacing: .4px; margin-bottom: 2px; }
+  .title { font-size: 17px; font-weight: 650; margin-bottom: 4px; }
+  .snip { font-size: 14px; color: var(--text); opacity: .92; }
+  .snip mark, .full mark { background: var(--mark); color: var(--mark-text); border-radius: 3px; padding: 0 1px; }
+  .full { font-size: 14px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); display: none; }
+  .card.open .full { display: block; }
+  .actions { margin-top: 10px; display: flex; align-items: center; gap: 12px; }
+  .play {
+    display: inline-block; background: var(--accent); color: var(--accent-text);
+    text-decoration: none; font-weight: 600; font-size: 14px;
+    padding: 9px 14px; border-radius: 10px;
+  }
+  .play:active { opacity: .85; }
+  .weblink, .serieslink { font-size: 13px; color: var(--muted); }
+  .badge {
+    font-size: 12px; color: var(--muted); border: 1px solid var(--line);
+    padding: 6px 10px; border-radius: 10px;
+  }
+  .empty { text-align: center; color: var(--muted); padding: 40px 10px 10px; }
+  .empty .big { font-size: 40px; margin-bottom: 10px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 14px; }
+  .chip {
+    background: var(--chip); border: none; color: var(--text); font-size: 14px;
+    padding: 8px 13px; border-radius: 999px; cursor: pointer;
+  }
+  footer { max-width: 640px; margin: 0 auto; padding: 10px 14px 34px; color: var(--muted); font-size: 12px; text-align: center; }
+  footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>📺 Family Guy Episode Finder<span class="sub" id="count"></span></h1>
+  <div class="bar">
+    <input id="q" type="search" placeholder="Search plots &amp; subplots…" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <button id="random" title="Random episode" aria-label="Random episode">🎲</button>
+  </div>
+</header>
+<main id="results"></main>
+<footer id="foot"></footer>
+<script>
+"use strict";
+const $q = document.getElementById("q");
+const $results = document.getElementById("results");
+const SAMPLES = ["chicken fight", "giant chicken", "Y2K", "time machine", "Meg gets a boyfriend", "Brian publishes a book", "road trip", "prostate exam"];
+
+const isMobile = /iPhone|iPod|Android/i.test(navigator.userAgent)
+  || (navigator.maxTouchPoints > 1 && /Mac|iPad/i.test(navigator.userAgent));
+
+let DATA = null, EPS = [];
+
+fetch("episodes.json")
+  .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+  .then(d => {
+    DATA = d;
+    EPS = d.episodes.map(e => ({ ...e, tl: e.t.toLowerCase(), sl: e.short.toLowerCase(), pl: e.plot.toLowerCase() }));
+    document.getElementById("count").textContent = EPS.length + " episodes";
+    document.getElementById("foot").innerHTML =
+      `${EPS.length} episodes · data ${esc(d.built)} · Disney+ ${esc(d.country)}<br>` +
+      `Plot text from <a href="https://en.wikipedia.org/wiki/List_of_Family_Guy_episodes" target="_blank" rel="noopener">Wikipedia</a> (CC BY-SA 4.0) · ` +
+      `links via JustWatch · unofficial fan tool, not affiliated with Disney or Fox`;
+    renderEmpty();
+  })
+  .catch(err => {
+    $results.innerHTML = `<div class="empty">Couldn't load episode data (${esc(String(err))}).<br>Serve this folder over http, or check your connection.</div>`;
+  });
+
+// ------------------------------------------------------------------ search
+const reEscape = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function termRegexes(terms) {
+  return terms.map((t, i) =>
+    new RegExp("\\b" + reEscape(t) + (i === terms.length - 1 ? "" : "\\b"), "gi"));
+}
+const countHits = (str, re) => { re.lastIndex = 0; const m = str.match(re); return m ? m.length : 0; };
+
+function search(qRaw) {
+  const q = qRaw.trim().toLowerCase();
+  const terms = q.match(/[a-z0-9']+/g) || [];
+  if (!terms.length) return null;
+  const res = termRegexes(terms);
+  const scored = [];
+  for (const ep of EPS) {
+    let score = 0, present = 0;
+    for (const re of res) {
+      const t = countHits(ep.tl, re), s = countHits(ep.sl, re), p = countHits(ep.pl, re);
+      if (t + s + p > 0) present++;
+      score += 6 * t + 3 * s + Math.min(p, 4);
+    }
+    if (!present) continue;
+    score *= (present === terms.length) ? 2 : 0.35;
+    if (terms.length > 1) {
+      if (ep.tl.includes(q)) score += 40;
+      else if (ep.sl.includes(q)) score += 20;
+      else if (ep.pl.includes(q)) score += 12;
+    }
+    scored.push([score, ep]);
+  }
+  scored.sort((a, b) => b[0] - a[0] || (a[1].s - b[1].s) || (a[1].e - b[1].e));
+  return { terms, q, eps: scored.slice(0, 30).map(x => x[1]), total: scored.length };
+}
+
+// ------------------------------------------------------------------ render
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const pad = n => String(n).padStart(2, "0");
+
+function highlight(escapedText, terms) {
+  if (!terms || !terms.length) return escapedText;
+  const re = new RegExp("\\b(" + terms.map(reEscape).join("|") + ")", "gi");
+  return escapedText.replace(re, "<mark>$1</mark>");
+}
+
+function snippet(ep, terms, q) {
+  const fields = [[ep.plot, ep.pl], [ep.short, ep.sl]];
+  for (const [orig, low] of fields) {
+    if (!orig) continue;
+    let pos = -1;
+    if (terms.length > 1 && low.includes(q)) pos = low.indexOf(q);
+    else {
+      for (const re of termRegexes(terms)) {
+        re.lastIndex = 0; const m = re.exec(low);
+        if (m && (pos < 0 || m.index < pos)) pos = m.index;
+      }
+    }
+    if (pos >= 0) {
+      const start = Math.max(0, low.lastIndexOf(" ", Math.max(0, pos - 70)) + 1);
+      let end = pos + 150;
+      if (end < orig.length) { const sp = low.indexOf(" ", end); end = sp < 0 ? orig.length : sp; }
+      else end = orig.length;
+      return (start > 0 ? "…" : "") + esc(orig.slice(start, end)) + (end < orig.length ? "…" : "");
+    }
+  }
+  const fall = ep.short || ep.plot;
+  return esc(fall.length > 190 ? fall.slice(0, 190) + "…" : fall);
+}
+
+function playLinks(ep) {
+  if (!ep.u) {
+    return `<span class="badge">Not on Disney+ ${esc(DATA.country)}</span>` +
+      `<a class="serieslink" href="${esc(DATA.series)}" target="_blank" rel="noopener">series page ↗</a>`;
+  }
+  const web = `https://www.disneyplus.com/play/${esc(ep.u)}`;
+  if (isMobile) {
+    return `<a class="play" href="disneyplus://www.disneyplus.com/play/${esc(ep.u)}">▶&nbsp; Watch on Disney+</a>` +
+      `<a class="weblink" href="${web}" target="_blank" rel="noopener">web ↗</a>`;
+  }
+  return `<a class="play" href="${web}" target="_blank" rel="noopener">▶&nbsp; Watch on Disney+</a>`;
+}
+
+function card(ep, terms, q) {
+  const full = ep.plot || ep.short;
+  return `<div class="card" data-key="${ep.s}-${ep.e}" role="button" aria-expanded="false">
+    <div class="meta">S${pad(ep.s)} · E${pad(ep.e)}${ep.y ? " · " + ep.y : ""}</div>
+    <div class="title">${highlight(esc(ep.t), terms)}</div>
+    <div class="snip">${highlight(snippet(ep, terms || [], q || ""), terms)}</div>
+    <div class="full">${highlight(esc(full), terms)}</div>
+    <div class="actions">${playLinks(ep)}</div>
+  </div>`;
+}
+
+function renderEmpty() {
+  $results.innerHTML = `<div class="empty">
+      <div class="big">🔎</div>
+      Search ${EPS.length} episodes by anything that happens in them —<br>main plot or the "Meanwhile…" subplot.
+      <div class="chips">${SAMPLES.map(s => `<button class="chip" data-q="${esc(s)}">${esc(s)}</button>`).join("")}</div>
+    </div>`;
+}
+
+function renderSearch(r) {
+  if (!r.eps.length) {
+    $results.innerHTML = `<div class="empty">Nothing found for “${esc(r.q)}”.<br>Try fewer or different words.</div>`;
+    return;
+  }
+  $results.innerHTML = `<div class="note">${r.total} match${r.total === 1 ? "" : "es"}${r.total > 30 ? ", showing top 30" : ""} — tap a card for the full plot</div>`
+    + r.eps.map(ep => card(ep, r.terms, r.q)).join("");
+}
+
+function renderRandom() {
+  const ep = EPS[Math.floor(Math.random() * EPS.length)];
+  $q.value = "";
+  $results.innerHTML = `<div class="note">🎲 Random pick — hit the die again to reroll</div>` + card(ep, [], "");
+}
+
+// ------------------------------------------------------------------ events
+let timer = null;
+$q.addEventListener("input", () => {
+  clearTimeout(timer);
+  timer = setTimeout(() => {
+    const r = search($q.value);
+    if (!r) renderEmpty(); else renderSearch(r);
+  }, 70);
+});
+document.getElementById("random").addEventListener("click", renderRandom);
+$results.addEventListener("click", e => {
+  const chip = e.target.closest(".chip");
+  if (chip) { $q.value = chip.dataset.q; $q.dispatchEvent(new Event("input")); return; }
+  if (e.target.closest("a")) return; // let links act like links
+  const c = e.target.closest(".card");
+  if (c) { c.classList.toggle("open"); c.setAttribute("aria-expanded", c.classList.contains("open")); }
+});
+</script>
+</body>
+</html>
