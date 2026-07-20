@@ -92,6 +92,13 @@
     background: var(--chip); border: none; color: var(--text); font-size: 14px;
     padding: 8px 13px; border-radius: 999px; cursor: pointer;
   }
+  .browse { margin-top: 22px; text-align: left; }
+  .browse h2 {
+    font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px;
+    color: var(--muted); margin: 0 0 8px 2px;
+  }
+  .browse .chips { justify-content: flex-start; margin-top: 0; }
+  .sep { border: none; border-top: 1px solid var(--line); margin: 22px 0 0; }
   footer { max-width: 640px; margin: 0 auto; padding: 10px 14px 34px; color: var(--muted); font-size: 12px; text-align: center; }
   footer a { color: var(--muted); }
 </style>
@@ -112,6 +119,13 @@
 const $q = document.getElementById("q");
 const $results = document.getElementById("results");
 const SAMPLES = ["chicken fight", "\"giant chicken\"", "Y2K", "time machine", "Meg gets a boyfriend", "Brian publishes a book", "road trip", "prostate exam"];
+const CHARACTERS = ["Peter", "Lois", "Chris", "Meg", "Stewie", "Brian", "Quagmire", "Joe", "Cleveland"];
+const LOCATIONS = [
+  { label: "Quahog", q: "Quahog" },
+  { label: "The Drunken Clam", q: "\"Drunken Clam\"" },
+  { label: "James Woods High School", q: "school" },
+  { label: "Quahog Hospital", q: "hospital" },
+];
 
 const isMobile = /iPhone|iPod|Android/i.test(navigator.userAgent)
   || (navigator.maxTouchPoints > 1 && /Mac|iPad/i.test(navigator.userAgent));
@@ -163,10 +177,11 @@ const countSub = (hay, needle) => {
   return n;
 };
 
-function search(qRaw) {
+function search(qRaw, opts = {}) {
   const { qplain, phrases, terms } = parseQuery(qRaw);
   if (!phrases.length && !terms.length) return null;
-  const res = termRegexes(terms, wholeWords());
+  const whole = opts.forceWhole !== undefined ? opts.forceWhole : wholeWords();
+  const res = termRegexes(terms, whole);
   const scored = [];
   for (const ep of EPS) {
     let score = 0;
@@ -194,7 +209,7 @@ function search(qRaw) {
     scored.push([score, ep]);
   }
   scored.sort((a, b) => b[0] - a[0] || (a[1].s - b[1].s) || (a[1].e - b[1].e));
-  return { terms, phrases, qplain, hl: [...phrases, ...terms],
+  return { terms, phrases, qplain, whole, hl: [...phrases, ...terms],
            eps: scored.slice(0, 30).map(x => x[1]), total: scored.length };
 }
 
@@ -202,10 +217,10 @@ function search(qRaw) {
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const pad = n => String(n).padStart(2, "0");
 
-function highlight(escapedText, hl) {
+function highlight(escapedText, hl, whole) {
   if (!hl || !hl.length) return escapedText;
   const parts = [...hl].sort((a, b) => b.length - a.length).map(reEscape); // phrases before their words
-  const re = new RegExp("\\b(" + parts.join("|") + ")", "gi");
+  const re = new RegExp("\\b(" + parts.join("|") + ")" + (whole ? "\\b" : ""), "gi");
   return escapedText.replace(re, "<mark>$1</mark>");
 }
 
@@ -220,7 +235,7 @@ function snippet(ep, r) {
     }
     if (pos < 0 && r.terms.length > 1 && r.qplain && low.includes(r.qplain)) pos = low.indexOf(r.qplain);
     if (pos < 0) {
-      for (const re of termRegexes(r.terms, wholeWords())) {
+      for (const re of termRegexes(r.terms, r.whole)) {
         re.lastIndex = 0; const m = re.exec(low);
         if (m && (pos < 0 || m.index < pos)) pos = m.index;
       }
@@ -264,25 +279,31 @@ function refLinks(ep) {
 
 function card(ep, r) {
   const hl = r ? r.hl : [];
+  const whole = r ? r.whole : false;
   const full = ep.plot || ep.short;
   const fall = ep.short || ep.plot;
   const snip = r ? snippet(ep, r) : esc(fall.length > 190 ? fall.slice(0, 190) + "…" : fall);
   return `<div class="card" data-key="${ep.s}-${ep.e}" role="button" aria-expanded="false">
     <div class="meta">S${pad(ep.s)} · E${pad(ep.e)}${ep.y ? " · " + ep.y : ""}</div>
-    <div class="title">${highlight(esc(ep.t), hl)}</div>
-    <div class="snip">${highlight(snip, hl)}</div>
-    <div class="full">${highlight(esc(full), hl)}</div>
+    <div class="title">${highlight(esc(ep.t), hl, whole)}</div>
+    <div class="snip">${highlight(snip, hl, whole)}</div>
+    <div class="full">${highlight(esc(full), hl, whole)}</div>
     <div class="actions">${playLinks(ep)}</div>
     <div class="links">${refLinks(ep)}</div>
   </div>`;
 }
 
 function renderEmpty() {
+  const charChips = CHARACTERS.map(c => `<button class="chip" data-q="${esc(c)}" data-whole="1">${esc(c)}</button>`).join("");
+  const locChips = LOCATIONS.map(l => `<button class="chip" data-q="${esc(l.q)}" data-whole="1">${esc(l.label)}</button>`).join("");
   $results.innerHTML = `<div class="empty">
       <div class="big">🔎</div>
       Search ${EPS.length} episodes by anything that happens in them —<br>main plot or the "Meanwhile…" subplot.<br>
       Wrap words in "double quotes" to match an exact phrase.
       <div class="chips">${SAMPLES.map(s => `<button class="chip" data-q="${esc(s)}">${esc(s)}</button>`).join("")}</div>
+      <hr class="sep">
+      <div class="browse"><h2>Browse by character</h2><div class="chips">${charChips}</div></div>
+      <div class="browse"><h2>Browse by location</h2><div class="chips">${locChips}</div></div>
     </div>`;
 }
 
@@ -329,7 +350,14 @@ document.querySelector("h1").addEventListener("click", () => {
 });
 $results.addEventListener("click", e => {
   const chip = e.target.closest(".chip");
-  if (chip) { $q.value = chip.dataset.q; $q.dispatchEvent(new Event("input")); return; }
+  if (chip) {
+    $q.value = chip.dataset.q;
+    clearTimeout(timer);
+    const r = search($q.value, { forceWhole: chip.dataset.whole === "1" ? true : undefined });
+    if (!r) renderEmpty(); else renderSearch(r);
+    window.scrollTo({ top: 0 });
+    return;
+  }
   if (e.target.closest("a")) return; // let links act like links
   const c = e.target.closest(".card");
   if (c) { c.classList.toggle("open"); c.setAttribute("aria-expanded", c.classList.contains("open")); }
