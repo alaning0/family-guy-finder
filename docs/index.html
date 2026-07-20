@@ -127,6 +127,15 @@ const LOCATIONS = [
   { label: "Quahog Hospital", q: "hospital" },
   { label: "Pawtucket Brewery", q: "\"Pawtucket Brewery\"" },
 ];
+// each emotion searches its synonyms as an OR (episode matches if ANY word appears)
+const EMOTIONS = [
+  { label: "Anger", q: "anger angry furious rage enraged mad outraged irritated annoyed" },
+  { label: "Surprise", q: "surprise surprised shocked shock stunned startled amazed" },
+  { label: "Disgust", q: "disgust disgusted gross grossed appalled nauseated" },
+  { label: "Enjoyment", q: "enjoy enjoys enjoyment happy happiness joy delighted excited thrilled pleased" },
+  { label: "Fear", q: "fear afraid scared terrified frightened nervous horrified" },
+  { label: "Sadness", q: "sad sadness depressed upset heartbroken grief crying cries devastated" },
+];
 
 const isMobile = /iPhone|iPod|Android/i.test(navigator.userAgent)
   || (navigator.maxTouchPoints > 1 && /Mac|iPad/i.test(navigator.userAgent));
@@ -297,6 +306,7 @@ function card(ep, r) {
 function renderEmpty() {
   const charChips = CHARACTERS.map(c => `<button class="chip" data-q="${esc(c)}" data-whole="1">${esc(c)}</button>`).join("");
   const locChips = LOCATIONS.map(l => `<button class="chip" data-q="${esc(l.q)}" data-whole="1">${esc(l.label)}</button>`).join("");
+  const emoChips = EMOTIONS.map(m => `<button class="chip" data-q="${esc(m.q)}" data-whole="1">${esc(m.label)}</button>`).join("");
   $results.innerHTML = `<div class="empty">
       <div class="big">🔎</div>
       Search ${EPS.length} episodes by anything that happens in them —<br>main plot or the "Meanwhile…" subplot.<br>
@@ -305,6 +315,7 @@ function renderEmpty() {
       <hr class="sep">
       <div class="browse"><h2>Browse by character</h2><div class="chips">${charChips}</div></div>
       <div class="browse"><h2>Browse by location</h2><div class="chips">${locChips}</div></div>
+      <div class="browse"><h2>Browse by emotion</h2><div class="chips">${emoChips}</div></div>
     </div>`;
 }
 
