@@ -118,13 +118,14 @@
 "use strict";
 const $q = document.getElementById("q");
 const $results = document.getElementById("results");
-const SAMPLES = ["chicken fight", "\"giant chicken\"", "Y2K", "time machine", "Meg gets a boyfriend", "Brian publishes a book", "road trip", "prostate exam"];
-const CHARACTERS = ["Peter", "Lois", "Chris", "Meg", "Stewie", "Brian", "Quagmire", "Joe", "Cleveland"];
+const SAMPLES = ["chicken fight", "\"giant chicken\"", "Y2K", "time machine", "Meg gets a boyfriend", "Brian publishes a book", "road trip", "food", "business"];
+const CHARACTERS = ["Peter", "Lois", "Chris", "Meg", "Stewie", "Brian", "Quagmire", "Joe", "Cleveland", "Carter", "Pewterschmidt"];
 const LOCATIONS = [
   { label: "Quahog", q: "Quahog" },
   { label: "The Drunken Clam", q: "\"Drunken Clam\"" },
   { label: "James Woods High School", q: "school" },
   { label: "Quahog Hospital", q: "hospital" },
+  { label: "Pawtucket Brewery", q: "\"Pawtucket Brewery\"" },
 ];
 
 const isMobile = /iPhone|iPod|Android/i.test(navigator.userAgent)
